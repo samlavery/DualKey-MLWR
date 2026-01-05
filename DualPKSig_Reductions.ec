@@ -996,6 +996,7 @@ op is_dual_zc_msis_sol (mY1 mY2 : Rq_mat) (pk1 pk2 : Rp_vec)
   let pk1_lifted = lift_vec p_pk pk1 in
   let pk2_lifted = lift_vec p_pk pk2 in
   let u_lifted = lift_vec p_pk u in
+  u_distinct_ok u /\
   norm_inf_vec s <= tau /\
   norm_inf_vec (vec_sub (mat_vec_mul mY1 s)
                         (vec_add u_lifted (scalar_vec_mul c pk1_lifted))) <= tau /\
@@ -1054,7 +1055,8 @@ module DualZCMSIS_Lossy (B : DualZCMSIS_AdvT) = {
       (s, u, c, zP) <- oget result;
       pk1_lifted <- lift_vec p_pk pk1;
       u_lifted <- lift_vec p_pk u;
-      ok_pre <- norm_inf_vec s <= tau /\
+      ok_pre <- u_distinct_ok u /\
+        norm_inf_vec s <= tau /\
         norm_inf_vec (vec_sub (mat_vec_mul mY1 s)
                               (vec_add u_lifted (scalar_vec_mul c pk1_lifted))) <= tau;
       t <- mat_vec_mul mY2 s;
@@ -1228,7 +1230,7 @@ qed.
    3. The adversary A.find(mY1, mY2, pk1) outputs candidate (s, u, c, zP)
       (pk2 is hidden in lossy mode)
    4. Success requires is_dual_zc_msis_sol, which includes:
-      ||Y2*s - c*lift(pk2)||∞ <= tau2
+      u_distinct_ok u and ||Y2*s - c*lift(pk2)||∞ <= tau2
 
    KEY INSIGHT - STATISTICAL BOUND:
    ================================

@@ -28,10 +28,11 @@ axiom extraction_reduction
    Key insight: Verification equation directly encodes MSIS constraint.
 
    Verify checks:
-   1. ||sig_c||_∞ small (after lifting)
-   2. sig_c has zeros at P
-   3. ||Y1*sig - u - c*pk1||_∞ <= tau
-   4. ||Y2*sig - c*pk2||_∞ <= tau2
+   1. u_distinct_ok u (u in U* (minimal))
+   2. ||sig_c||_inf small (after lifting)
+   3. sig_c has zeros at P
+   4. ||Y1*sig - u - c*pk1||_inf <= tau
+   5. ||Y2*sig - c*pk2||_inf <= tau2
 
    This is EXACTLY is_dual_zc_msis_solution!
    ========================================================================== *)
@@ -55,16 +56,18 @@ declare module A <: Adversary {-G1, -SimState}.
    verification equation IS the MSIS constraint.
 
    Sig.verify (procedure) checks:
-   1. check_zeros sig_c P (zeros + embedded extended challenge)
-   2. ||Y1*S - u - c*pk1||_∞ <= tau (MSIS constraint 1)
-   3. ||Y2*S - c*pk2||_∞ <= tau2 (MSIS constraint 2 - dual)
-   4. L8/L9 projection bounds for both residuals (tau8/tau9)
+   1. u_distinct_ok u (u in U* (minimal))
+   2. check_zeros sig_c P (zeros + embedded extended challenge)
+   3. ||Y1*S - u - c*pk1||_inf <= tau (MSIS constraint 1)
+   4. ||Y2*S - c*pk2||_inf <= tau2 (MSIS constraint 2 - dual)
+   5. L8/L9 projection bounds for both residuals (tau8/tau9)
 
    is_dual_zc_msis_solution (predicate) checks:
-   1. check_zeros (sig_of s zpos) zpos
-   2. norm_inf_vec (Y1*s - u - c*pk1) <= tau
-   3. norm_inf_vec (Y2*s - c*pk2) <= tau2
-   4. L8/L9 projection bounds for both residuals (tau8/tau9)
+   1. u_distinct_ok u (u in U* (minimal))
+   2. check_zeros (sig_of s zpos) zpos
+   3. norm_inf_vec (Y1*s - u - c*pk1) <= tau
+   4. norm_inf_vec (Y2*s - c*pk2) <= tau2
+   5. L8/L9 projection bounds for both residuals (tau8/tau9)
 
    These are the same conditions, up to encoding.
 
@@ -81,7 +84,7 @@ lemma msis_solution_wellformed (S : Rq_vec) (u : Rp_vec) (c : challenge)
   is_dual_zc_msis_solution S u c pk1 pk2 P Y1 Y2 =>
   check_zeros (sig_of S P) P.
 proof.
-  by rewrite /is_dual_zc_msis_solution => [#] H1 _ _ _ _ _ _.
+  by rewrite /is_dual_zc_msis_solution => [#] _ H1 _ _ _ _ _ _.
 qed.
 
 (* ==========================================================================
@@ -98,13 +101,14 @@ qed.
    The extraction argument is tight because verification IS MSIS checking.
 
    VERIFICATION EQUATION (from Sig.verify):
-   1. Check ||sig_c||_∞ <= tau (short signature)
-   2. Check sig_c[P] = 0 (zeros at designated positions)
-   3. Check ||Y1 * S - u - c * pk1||_∞ <= tau  (MSIS constraint 1)
-   4. Check ||Y2 * S - c * pk2||_∞ <= tau2  (MSIS constraint 2 - DUAL)
+   1. Check u_distinct_ok u (u in U* (minimal))
+   2. Check ||sig_c||_inf <= tau (short signature)
+   3. Check sig_c[P] = 0 (zeros at designated positions)
+   4. Check ||Y1 * S - u - c * pk1||_inf <= tau  (MSIS constraint 1)
+   5. Check ||Y2 * S - c * pk2||_inf <= tau2  (MSIS constraint 2 - DUAL)
 
    MSIS SOLUTION (from is_dual_zc_msis_solution):
-   Same four constraints! The verification equation IS the MSIS check.
+   Same constraints! The verification equation IS the MSIS check.
 
    KEY INSIGHT - NO FORKING LEMMA NEEDED:
    Unlike traditional Fiat-Shamir proofs that require running the adversary
@@ -116,11 +120,11 @@ qed.
    - No rewinding or forking is required
 
    THE DUAL AMPLIFICATION:
-   The second constraint ||Y2 * S - c * pk2||_∞ <= tau2 is crucial.
+   The second constraint ||Y2 * S - c * pk2||_inf <= tau2 is crucial.
    In lossy mode (G1), pk2 is random (not derived from secret X).
    A random pk2 satisfies this constraint with probability only:
-     Pr[Y2*S - c*pk2 small for random pk2] ≈ (2*tau2+1)^{kn} / q^{kn}
-   This is ≈ 2^{-494} for our parameters.
+     Pr[Y2*S - c*pk2 small for random pk2] approx (2*tau2+1)^{kn} / q^{kn}
+   This is approx 2^{-494} for our parameters.
 
    CHALLENGE GUESSING:
    If adversary produces valid forgery without querying H2(u, pk1, m_star):
@@ -149,10 +153,10 @@ qed.
       Any valid forgery (m_star, sig_star) where
       Sig.verify(pk, m_star, sig_star) = true gives an MSIS solution.
       The signature S = lift_vec(sig_c) satisfies:
-      - ||S||_∞ <= tau
+      - ||S||_inf <= tau
       - S has zeros at P
-      - ||Y1*S - u - c*pk1||_∞ <= tau
-      - ||Y2*S - c*pk2||_∞ <= tau2
+      - ||Y1*S - u - c*pk1||_inf <= tau
+      - ||Y2*S - c*pk2||_inf <= tau2
 
    3. TIGHT REDUCTION (NO FORKING):
       Build reduction B:
@@ -202,10 +206,10 @@ end section Extraction.
 
    3. THE DUAL CONSTRAINT:
       The second public key pk2 = round(Y2 * X) provides:
-      ||Y2*S - c*pk2||_∞ <= tau2
+      ||Y2*S - c*pk2||_inf <= tau2
 
       For a random pk2 (lossy mode), this constraint has probability
-      only (2*tau2 + 1)^{kn} / q^{kn} ≈ 2^{-494} of being satisfied
+      only (2*tau2 + 1)^{kn} / q^{kn} approx 2^{-494} of being satisfied
       by any short S.
 
       This is the "dual amplification" that provides 494 bits of

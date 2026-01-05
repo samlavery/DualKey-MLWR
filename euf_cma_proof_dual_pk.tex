@@ -78,6 +78,8 @@ Minimum $D$ bound ($\ell_2^2$) & $D_2^{\min}$ & 2000 \\
     \item $\mathcal{T}_w$: sparse ternary distribution (weight $w$, coefficients in $\{-1, 0, 1\}$)
     \item $\round_p: R_q \to R_p$: coefficient-wise rounding $\round_p(a) = \lfloor a \cdot p / q \rceil$
     \item $\lift_p: R_p \to R_q$: lifting $\lift_p(b) = b \cdot (q/p) + (q/2p)$ (centered)
+    \item $\mathsf{cent}_{p_{pk}}(x) = x$ if $0 \le x < p_{pk}/2$, else $x - p_{pk}$ (maps to $[-p_{pk}/2, p_{pk}/2)$)
+    \item $U^\star \subset R_{p_{pk}}^k$: commitments whose coefficients, after $\mathsf{cent}_{p_{pk}}$, take at most two distinct values across all $k n$ positions
     \item $\pi_8, \pi_9$: downmaps for L8/L9 projections (dimension reduction with moduli $q_8, q_9$)
     \item $\mathsf{HuffEnc}, \mathsf{HuffDec}$: Huffman encoding/decoding of coefficient vectors
     \item $H_1, H_2$: independent random oracles (SHAKE256 with domain separation)
@@ -127,7 +129,7 @@ Minimum $D$ bound ($\ell_2^2$) & $D_2^{\min}$ & 2000 \\
         \item $\mathit{ctr} \gets \mathit{ctr} + 1$
         \item \textbf{for} $i = 1, \ldots, k$: $R_i \gets \mathsf{PRF}(\rho, \mathit{ctr}, i) \in \mathcal{T}_{w_R}$ \hfill // deterministic nonce
         \item $u \gets \round_{p_{pk}}(R \cdot Y_1)$ \hfill // commitment
-        \item \textbf{if} $u$ has $>2$ distinct coefficients: \textbf{continue} \hfill // enforce Huffman size
+        \item \textbf{if} $u \notin U^\star$: \textbf{continue} \hfill // enforce Huffman size
         \item $c \gets H_2(u \| pk_1 \| m) \in \mathcal{T}_{w_c}$ \hfill // sparse ternary challenge
         \item $D \gets c \cdot X$
         \item $S \gets R + D$ \hfill // raw response (in $R_q^k$)
@@ -156,6 +158,7 @@ Minimum $D$ bound ($\ell_2^2$) & $D_2^{\min}$ & 2000 \\
 \begin{enumerate}
     \item Parse $\sigma = (\hat{u}, \hat{S})$, $pk = (pk_1, pk_2, \sigma)$
     \item $u \gets \mathsf{HuffDec}(\hat{u})$, $S_c \gets \mathsf{HuffDec}(\hat{S})$
+    \item \textbf{if} $u \notin U^\star$: \textbf{return} 0 \hfill // enforce minimal commitment
     \item Expand $Y_1, Y_2$ from $\sigma$
     \item $\tilde{S} \gets \lift_{p_s}(S_c)$ \hfill // lift compressed response
     \item $\widetilde{pk_1} \gets \lift_{p_{pk}}(pk_1)$, $\widetilde{pk_2} \gets \lift_{p_{pk}}(pk_2)$, $\tilde{u} \gets \lift_{p_{pk}}(u)$
@@ -186,6 +189,8 @@ Minimum $D$ bound ($\ell_2^2$) & $D_2^{\min}$ & 2000 \\
 \end{enumerate}
 }}
 \end{center}
+
+We treat membership in $U^\star$ as part of validity: if $\mathsf{Verify}(pk, m, \sigma) = 1$ then $u \in U^\star$.
 
 \subsection{Correctness}
 
@@ -375,6 +380,7 @@ The forger cannot distinguish simulated signatures from real signatures unless i
 \begin{proof}
 In both real and simulated modes:
 \begin{itemize}
+    \item $u \in U^\star$ (same low-entropy commitment filter)
     \item $S$ has zeros at positions $P = H_1(pk_1 \| pk_2 \| m)$
     \item Both residuals $e_1 = S \cdot Y_1 - u - c \cdot pk_1$ and $e_2 = S \cdot Y_2 - c \cdot pk_2$ are small
     \item $c = H_2(u \| pk_1 \| m)$ is a valid sparse challenge
@@ -396,6 +402,7 @@ A valid forgery yields a Dual-ZC-MSIS solution.
 \begin{proof}
 The forgery satisfies:
 \begin{enumerate}
+    \item $u^* \in U^\star$
     \item $S^*$ has zeros at $P^* = H_1(pk_1 \| pk_2 \| m^*)$
     \item $\|S^* \cdot Y_1 - u^* - c^* \cdot pk_1\|_\infty \leq \tau$
     \item $\|S^* \cdot Y_2 - c^* \cdot pk_2\|_\infty \leq 2\tau$
@@ -558,7 +565,7 @@ Module-LWR and Module-SIS resist known quantum attacks. Grover's algorithm does 
 \hline
 \multicolumn{3}{|c|}{\textbf{Signature}} \\
 \hline
-$u$ (Huffman) & $\leq 70$ bytes & Enforced by low-entropy $u$ filter \\
+$u$ (Huffman) & $\leq 70$ bytes & Enforced by $U^\star$ filter (at most 2 centered values) \\
 $S$ (Huffman) & variable & Response (zeros + extended challenge) \\
 \textbf{Total} & \textbf{$\leq 256$ bytes} & Target size (implementation) \\
 \hline
@@ -812,27 +819,31 @@ Summing over $q_S$ queries:
 \label{lem:ro-program}
 The simulator programs $H_2(u \| pk_1 \| m) := c$ for each signing query. This succeeds unless:
 \begin{enumerate}
-    \item The adversary queried $H_2(u \| pk_1 \| m)$ before the signing query (probability $\leq q_H / q^{kn}$ per query)
+    \item The adversary queried $H_2(u \| pk_1 \| m)$ before the signing query (probability $\leq q_H / |U^\star|$ per query)
     \item Two signing queries produce the same $u$ for different $(m, c)$ pairs (birthday bound)
 \end{enumerate}
 
 The total failure probability is:
 \[
-p_{\text{fail}} \leq \frac{q_S \cdot q_H}{q^{kn}} + \frac{q_S^2}{2 \cdot q^{kn}} \leq \frac{2 q_S q_H}{q^{kn}}
+p_{\text{fail}} \leq \frac{q_S \cdot q_H}{|U^\star|} + \frac{q_S^2}{2 \cdot |U^\star|} \leq \frac{2 q_S q_H}{|U^\star|}
 \]
 \end{lemma}
 
 \begin{proof}
 For each signing query, $u = \round(S \cdot Y_1 - c \cdot \lift(pk_1))$ is determined by $(S, c)$.
 
-\textbf{Pre-query collision}: The adversary guesses $u$ before it's computed. Since $u \in R_{p_{pk}}^k$ has $kn \log_2(p_{pk}) = 4 \cdot 128 \cdot 7 = 3584$ bits of entropy, and the adversary makes $q_H$ guesses:
+\textbf{Pre-query collision}: The adversary guesses $u$ before it's computed. Since $u \in U^\star$ and
+$
+|U^\star| \leq \left(\binom{p_{pk}}{2} + p_{pk}\right) \cdot 2^{kn} \approx 2^{525}
+$
+for $p_{pk} = 128$ and $kn = 512$, and the adversary makes $q_H$ guesses:
 \[
-\Pr[\text{pre-query collision}] \leq \frac{q_H}{p_{pk}^{kn}} = \frac{q_H}{128^{512}} \approx \frac{q_H}{2^{3584}}
+\Pr[\text{pre-query collision}] \leq \frac{q_H}{|U^\star|}
 \]
 
 \textbf{Inter-query collision}: Two signing queries $(m_i, c_i)$ and $(m_j, c_j)$ with $i \neq j$ produce the same $u$. By birthday bound:
 \[
-\Pr[\text{inter-query collision}] \leq \frac{q_S^2}{2 \cdot p_{pk}^{kn}}
+\Pr[\text{inter-query collision}] \leq \frac{q_S^2}{2 \cdot |U^\star|}
 \]
 
 Both are negligible for $q_S, q_H \leq 2^{64}$.
@@ -846,7 +857,7 @@ Combining all lemmas:
 \begin{align*}
 \mathsf{Adv}^{\mathsf{EUF-CMA}} &\leq \mathsf{Adv}^{\mathsf{Dual\text{-}MLWR}} + \mathsf{Adv}^{\mathsf{Dual\text{-}ZC\text{-}MSIS}} \\
 &\quad + q_S \cdot \epsilon_{\mathsf{round}} \tag{Oracle equiv., Thm~\ref{thm:oracle-equiv}} \\
-&\quad + \frac{2 q_S q_H}{q^{kn}} \tag{RO programming, Lem~\ref{lem:ro-program}} \\
+&\quad + \frac{2 q_S q_H}{|U^\star|} \tag{RO programming, Lem~\ref{lem:ro-program}} \\
 &\quad + \frac{q_H}{|\mathcal{C}|} \tag{Challenge guessing}
 \end{align*}
 

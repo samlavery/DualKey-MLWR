@@ -235,7 +235,8 @@ op apply_zeros : Rq_vec -> zero_pos -> Rq_vec.
 op check_zeros : Rp_vec -> zero_pos -> bool.
 (* check_zeros verifies both zero positions and embedded extended challenge *)
 
-(* Compression-based rejection predicate on u (matches C's u_distinct <= 2). *)
+(* Compression-based rejection predicate on u (matches C's u_distinct <= 2,
+   using centered coefficients in [-p_pk/2, p_pk/2)). *)
 op u_distinct_ok : Rp_vec -> bool.
 
 (* Signing acceptance predicate: mirrors C signing filters. *)
@@ -696,7 +697,11 @@ module DualPKSig (D : DummyT) = {
 
     c <- H2 u pk1 m;
 
-    valid <- check_zeros sig_c zpos_P;
+    valid <- u_distinct_ok u;
+
+    if (valid) {
+      valid <- check_zeros sig_c zpos_P;
+    }
 
     if (valid) {
       e1 <- vec_sub (vec_sub (mat_vec_mul matY1 sig_lifted) u_lifted)
@@ -995,14 +1000,16 @@ module B_DualMLWR (A : Adversary) : DualMLWR_AdvT = {
    ========================================================================== *)
 
 (* A Dual-ZC-MSIS solution is a vector S such that:
-   1. S has zeros (and embedded ext) at positions P
-   2. ||S·Y1 - u - c·pk1||_∞ <= tau
-   3. ||S·Y2 - c·pk2||_∞ <= tau2  (dual constraint)
-   4. L8/L9 projections of both residuals are bounded by tau8/tau9 *)
+   1. u is in U* (u_distinct_ok u)
+   2. S has zeros (and embedded ext) at positions P
+   3. ||S·Y1 - u - c·pk1||_∞ <= tau
+   4. ||S·Y2 - c·pk2||_∞ <= tau2  (dual constraint)
+   5. L8/L9 projections of both residuals are bounded by tau8/tau9 *)
 
 pred is_dual_zc_msis_solution (s : Rq_vec, u : Rp_vec, c : challenge,
                                 pk1 pk2 : Rp_vec, zpos : zero_pos,
                                 Y1 Y2 : Rq_mat) =
+  u_distinct_ok u /\
   check_zeros (sig_of s zpos) zpos /\
   norm_inf_vec (vec_sub (vec_sub (mat_vec_mul Y1 s) (lift_vec p_pk u))
                         (scalar_vec_mul c (lift_vec p_pk pk1))) <= tau /\

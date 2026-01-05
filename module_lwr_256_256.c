@@ -1443,6 +1443,29 @@ typedef struct {
     int S_huffman_len;
 } signature_t;
 
+// Minimal commitment check: u_rounded must have <= 2 distinct centered values (U*)
+static int u_rounded_is_minimal(const module_t *u_rounded, int *distinct_out) {
+    int u_freq[U_MAX_SYMBOLS];
+    memset(u_freq, 0, sizeof(u_freq));
+
+    for (int i = 0; i < NUM_TREES; i++) {
+        for (int j = 0; j < N; j++) {
+            int16_t val = u_rounded->elem[i].coeffs[j];
+            if (val >= P_PK/2) val = val - P_PK;
+            if (val < -P_PK/2) val = val + P_PK;
+            u_freq[val + U_SYMBOL_OFFSET]++;
+        }
+    }
+
+    int u_distinct = 0;
+    for (int i = 0; i < U_MAX_SYMBOLS; i++) {
+        if (u_freq[i] > 0) u_distinct++;
+    }
+
+    if (distinct_out) *distinct_out = u_distinct;
+    return (u_distinct <= 2);
+}
+
 // Sample sparse ternary from SHAKE256 expansion of seed
 void sample_ternary_from_seed(ring_t *poly, const uint8_t *seed, size_t seed_len,
                               const char *domain, uint32_t index, int weight) {
@@ -1590,23 +1613,9 @@ void sign_message(const keypair_t *kp, const uint8_t *msg, size_t msg_len,
             lwr_round(&u.elem[i], &u_rounded.elem[i], Q7, P_PK);
         }
 
-        // COMPRESSION: Count distinct u_rounded values and reject if > 2
-        // This keeps u_huffman under ~70 bytes to ensure total sig <= 256
-        int u_freq[U_MAX_SYMBOLS];
-        memset(u_freq, 0, sizeof(u_freq));
-        for (int i = 0; i < NUM_TREES; i++) {
-            for (int j = 0; j < N; j++) {
-                int16_t val = u_rounded.elem[i].coeffs[j];
-                if (val >= P_PK/2) val = val - P_PK;
-                if (val < -P_PK/2) val = val + P_PK;
-                u_freq[val + U_SYMBOL_OFFSET]++;
-            }
-        }
+        // COMPRESSION: Enforce minimal commitment (U*) to keep u_huffman small
         int u_distinct = 0;
-        for (int i = 0; i < U_MAX_SYMBOLS; i++) {
-            if (u_freq[i] > 0) u_distinct++;
-        }
-        if (u_distinct > 2) {
+        if (!u_rounded_is_minimal(&u_rounded, &u_distinct)) {
             // Reject: u_rounded has too many distinct values
             continue;
         }
@@ -1850,6 +1859,13 @@ int verify_signature(const keypair_t *kp, const uint8_t *msg, size_t msg_len,
     // Decode Huffman-compressed u_rounded
     module_t u_rounded;
     huffman_decode_u(sig->u_huffman, sig->u_huffman_len, &u_rounded);
+
+    // Validity requires u_rounded to be minimal (same centering/count as sign)
+    int u_distinct = 0;
+    if (!u_rounded_is_minimal(&u_rounded, &u_distinct)) {
+        printf("  ✗ u_rounded not minimal: %d distinct values\n", u_distinct);
+        return 0;
+    }
 
     // Decode Huffman-compressed S
     module_t S_compressed;
@@ -2096,6 +2112,11 @@ int test_forgery_attack(const keypair_t *kp,
                     u_rounded.elem[i].coeffs[j] = r;
                 }
             }
+        }
+
+        // Enforce minimal commitment (U*) as part of validity definition
+        if (!u_rounded_is_minimal(&u_rounded, NULL)) {
+            continue;
         }
 
         // 2) Derive challenge seed and zero seed
