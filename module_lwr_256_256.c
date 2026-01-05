@@ -99,14 +99,16 @@ void sample_ternary_ultrasparse(ring_t *poly, rng_t *rng, int weight) {
 // Simple schoolbook negacyclic convolution
 void ring_mul_schoolbook(const ring_t *a, const ring_t *b, ring_t *c, int16_t q) {
     for (int i = 0; i < N; i++) {
-        int32_t sum = 0;
+        int64_t sum = 0;
         for (int j = 0; j <= i; j++) {
-            sum += (int32_t)a->coeffs[j] * b->coeffs[i - j];
+            sum += (int64_t)a->coeffs[j] * b->coeffs[i - j];
         }
         for (int j = i + 1; j < N; j++) {
-            sum -= (int32_t)a->coeffs[j] * b->coeffs[N + i - j];
+            sum -= (int64_t)a->coeffs[j] * b->coeffs[N + i - j];
         }
-        c->coeffs[i] = ((sum % q) + q) % q;
+        int64_t mod = sum % q;
+        if (mod < 0) mod += q;
+        c->coeffs[i] = (int16_t)mod;
     }
 }
 
@@ -115,16 +117,25 @@ void module_mul_vec(const module_t *X,
                     const ring_t Y[NUM_TREES][NUM_TREES],
                     module_t *result) {
     for (int j = 0; j < NUM_TREES; j++) {
-        memset(&result->elem[j], 0, sizeof(ring_t));
+        int64_t accum[N];
+        for (int k = 0; k < N; k++) {
+            accum[k] = 0;
+        }
 
         for (int i = 0; i < NUM_TREES; i++) {
             ring_t temp;
             ring_mul_schoolbook(&X->elem[i], &Y[i][j], &temp, Q7);
 
             for (int k = 0; k < N; k++) {
-                result->elem[j].coeffs[k] =
-                    (result->elem[j].coeffs[k] + temp.coeffs[k]) % Q7;
+                accum[k] += temp.coeffs[k];
             }
+        }
+
+        // Reduce once after full accumulation to avoid narrow-type overflow.
+        for (int k = 0; k < N; k++) {
+            int64_t mod = accum[k] % Q7;
+            if (mod < 0) mod += Q7;
+            result->elem[j].coeffs[k] = (int16_t)mod;
         }
     }
 }
