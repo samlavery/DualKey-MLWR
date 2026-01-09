@@ -1,8 +1,11 @@
 (* ============================================================================
-   Dual Public Key Module-LWR Signature Scheme
-   EUF-CMA Security with Zero Constraints - Tight Reduction
+   Cross-Product Module-LWR Signature Scheme
+   EUF-CMA Security - Tight Reduction
 
    Formal proof in EasyCrypt
+
+   Structure: pk = round(X1*Y2 - X2*Y1) with sum(X2) = 0 constraint
+   Verification: sigma = S1*Y2 - S2*Y1, e = sigma - u - c*pk
 
    AXIOM VERIFICATION: All axiom values verified by dual_pk_verification.sage
    ============================================================================ *)
@@ -12,45 +15,49 @@ require import StdOrder StdBigop.
 import RealOrder IntOrder.
 
 (* ==========================================================================
-   SECTION 1: PARAMETERS (Verified by SageMath)
+   SECTION 1: PARAMETERS (Matching module_lwr_256_256.c)
+
+   Cross-product structure: pk = round(X1*Y2 - X2*Y1) with sum(X2) = 0
    ========================================================================== *)
 
-op n : int = 128.        (* Ring dimension = 128 *)
-op k : int = 4.          (* Module rank = 4 *)
-op q : int = 4099.       (* Base modulus = 4099 *)
-op q8 : int = 521.       (* Projection modulus L8 = 521 *)
-op q9 : int = 263.       (* Projection modulus L9 = 263 *)
-op p_pk : int = 128.     (* PK compression modulus = 128 *)
-op p_s : int = 2048.     (* Signature compression modulus = 2048 *)
-op w_X : int = 48.      (* Secret key weight = 48 *)
-op w_R : int = 32.      (* Nonce weight = 32 *)
-op w_c : int = 64.      (* Challenge weight = 64 *)
-op z_pos : int = 64.     (* Zero positions per polynomial = 64 *)
-op tau : int = 525.      (* Verification bound Y1 = 525 *)
-op tau2 : int = 1050.    (* Verification bound Y2 = 2*tau = 1050 *)
-op tau8 : int = 275.     (* Projection bound L8 = 275 *)
-op tau9 : int = 140.     (* Projection bound L9 = 140 *)
-op B_inf : int = 400.    (* Rejection bound L_inf = 400 *)
-op B_2 : int = 80000.    (* Rejection bound L2^2 = 80000 *)
-op D_min_inf : int = 10. (* Minimum D bound L_inf = 10 *)
-op D_min_l2 : int = 2000. (* Minimum D bound L2^2 = 2000 *)
+op n : int = 128.          (* Ring dimension N = 128 *)
+op k : int = 4.            (* Module rank NUM_TREES = 4 *)
+op q : int = 2097152.      (* Base modulus Q7 = 2^21 *)
+op p_pk : int = 2048.      (* PK compression modulus P_PK = 2048 *)
+op p_s : int = 512.        (* Response LWR compression P_S = 512 (q/p = 8) *)
+op w_X : int = 32.         (* Secret key weight SECRET_WEIGHT = 32 *)
+op w_R : int = 12.         (* Nonce weight NONCE_WEIGHT = 12 (reduced for w_c=35) *)
+op w_c : int = 35.         (* Challenge weight CHALLENGE_WEIGHT = 35, |C| ≈ 2^132 *)
+op tau_raw : int = 300.    (* Verification bound L_inf (increased for w_c=35) *)
+op tau_l2 : int = 2000.    (* Verification bound L2 (increased for w_c=35) *)
+op B_inf : int = 20.       (* Rejection bound L_inf REJECTION_BOUND_INF = 20 *)
+op B_2 : int = 6000.       (* Rejection bound L2 (increased for w_c=35) *)
+op D_min_inf : int = 5.    (* Minimum D bound L_inf D_MIN_INF = 5 *)
+op D_min_l2 : int = 400.   (* Minimum D bound L2 D_MIN_L2 = 400 *)
+
+(* Legacy aliases for backward compatibility *)
+op tau : int = tau_raw.
+op tau2 : int = 2 * tau_raw.
 
 (* Parameter constraints - verified by SageMath *)
 lemma n_val : n = 128. by rewrite /n. qed.
 lemma k_val : k = 4. by rewrite /k. qed.
-lemma q_val : q = 4099. by rewrite /q. qed.
-lemma q8_val : q8 = 521. by rewrite /q8. qed.
-lemma q9_val : q9 = 263. by rewrite /q9. qed.
-lemma p_pk_val : p_pk = 128. by rewrite /p_pk. qed.
-lemma p_s_val : p_s = 2048. by rewrite /p_s. qed.
-lemma tau_val : tau = 525. by rewrite /tau. qed.
-lemma tau2_val : tau2 = 1050. by rewrite /tau2. qed.
-lemma tau8_val : tau8 = 275. by rewrite /tau8. qed.
-lemma tau9_val : tau9 = 140. by rewrite /tau9. qed.
-lemma z_pos_val : z_pos = 64. by rewrite /z_pos. qed.
-lemma w_X_val : w_X = 48. by rewrite /w_X. qed.
-lemma w_R_val : w_R = 32. by rewrite /w_R. qed.
-lemma w_c_val : w_c = 64. by rewrite /w_c. qed.
+lemma q_val : q = 2097152. by rewrite /q. qed.
+lemma p_pk_val : p_pk = 2048. by rewrite /p_pk. qed.
+lemma p_s_val : p_s = 512. by rewrite /p_s. qed.
+lemma tau_raw_val : tau_raw = 300. by rewrite /tau_raw. qed.
+lemma tau_l2_val : tau_l2 = 2000. by rewrite /tau_l2. qed.
+lemma w_X_val : w_X = 32. by rewrite /w_X. qed.
+lemma w_R_val : w_R = 12. by rewrite /w_R. qed.
+lemma w_c_val : w_c = 35. by rewrite /w_c. qed.
+lemma B_inf_val : B_inf = 20. by rewrite /B_inf. qed.
+lemma B_2_val : B_2 = 6000. by rewrite /B_2. qed.
+lemma D_min_inf_val : D_min_inf = 5. by rewrite /D_min_inf. qed.
+lemma D_min_l2_val : D_min_l2 = 400. by rewrite /D_min_l2. qed.
+
+(* Legacy lemmas for backward compatibility *)
+lemma tau_val : tau = 300. by rewrite /tau /tau_raw. qed.
+lemma tau2_val : tau2 = 600. by rewrite /tau2 /tau_raw. qed.
 
 lemma n_pos : 0 < n. proof. by rewrite /n; smt(). qed.
 lemma k_pos : 0 < k. proof. by rewrite /k; smt(). qed.
