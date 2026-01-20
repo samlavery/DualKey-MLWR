@@ -6,7 +6,7 @@ EC_ROOTS := DualPKSig.ec DualPKSig_SimMain.ec DualPKSig_Simulation.ec DualPKSig_
 # Phony targets
 .PHONY: all ec-check clean
 
-all: ec-check module_lwr_256_256
+all: ec-check crt_coupled_sig.c
 
 # Type-check each EC root once and drop a .ok stamp file
 ec-check: $(EC_ROOTS:.ec=.ok)
@@ -19,11 +19,11 @@ CC      := cc
 CFLAGS  := -O2 -Wall -Wextra
 LDFLAGS := -lcrypto   # plus any -I/-L for OpenSSL if needed
 
-module_lwr_256_256: module_lwr_256_256.c
+module_lwr_256_256: crt_coupled_sig.c.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 paper: 
 	pdflatex euf_cma_proof_dual_pk.tex
 
 clean:
-	rm -f *.ok module_lwr_256_256 *.eco 
+	rm -f *.ok crt_coupled_sig.c *.eco 

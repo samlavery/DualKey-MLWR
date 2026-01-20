@@ -1,159 +1,131 @@
-# Module-LWR Cross-Product Signature Algorithm Cheat Sheet
+# CRT-Coupled Two-Ring Module-LWR Signature Cheat Sheet
 
 ## Overview
-Module-LWR signature scheme with cross-product structure for covariance attack resistance.
-
-**Cross-Product Structure**:
-```
-SK: (X1, X2, Y1, Y2)           // Two sparse secrets, two public components
-pk = round(X1*Y2 - X2*Y1)      // Single public key from cross product
-```
-
-**Constraint**: `sum(X2) = 0` (X2 coefficients must sum to zero)
-
-**Signing**:
-```
-S1 = R1 + c*X1                 // Response 1
-S2 = R2 + c*X2                 // Response 2
-σ = S1*Y2 - S2*Y1              // Signature (cross product)
-u = R1*Y2 - R2*Y1              // Commitment (cross product)
-```
-
-**Verification**:
-```
-e = σ - u - c*pk ≈ 0           // Single equation check
-```
-
-**Why Cross-Product Prevents Covariance Attack**:
-- Standard scheme: σ = S*Y leaks E[σ·c] ∝ X*Y (recovers secret direction)
-- Cross-product: σ = S1*Y2 - S2*Y1, covariance gives X1*Y2 - X2*Y1 = pk (public!)
-- Attacker only recovers public key, not individual secrets X1 or X2
+- Master ring: Z_q[X]/(X^512 - 1) with q=499
+- CRT factorization into cyclic and negacyclic component rings:
+  - Cyclic: Z_q[X]/(X^256 - 1) where X^N = 1
+  - Negacyclic: Z_q[X]/(X^256 + 1) where X^N = -1
+- Project from master ring to components:
+  - x_cyc[i] = x[i] + x[i+N]
+  - x_neg[i] = x[i] - x[i+N]
+- Lift back to master ring (parity required):
+  - x[i] = (x_cyc[i] + x_neg[i]) / 2
+  - x[i+N] = (x_cyc[i] - x_neg[i]) / 2
+  - Requires x_cyc[i] ≡ x_neg[i] (mod 2) for all i
+- Critical: secrets, nonces, and challenges are sampled in the 512-dim master ring
+  with **trace-zero constraint**, then projected. This forces attackers to work in
+  the full 512-dim structure.
+- Same public polynomial y (from seed) used in both rings.
+- Both commitments w_cyc and w_neg are computed and included in the hash.
 
 ---
 
-## Constants
+## Parameters
 
-### Ring/Module Parameters
+### Ring and Modulus
 ```
-N = 128              // Ring dimension (Z_q[X]/(X^N+1))
-NUM_TREES = 4        // Module rank (4x128 = 512 total coefficients)
-```
-
-### Modulus
-```
-Q = 4096             // Primary modulus
+N  = 256       // Component ring dimension
+N2 = 512       // Master ring dimension (2×N)
+Q  = 499       // Prime modulus (Q ≡ 3 mod 8)
+P  = 48        // Rounding modulus (Q/P ≈ 10.4)
 ```
 
-### LWR Compression Parameters
+### Sampling and Bounds
 ```
-P_PK = 2048          // Public key compression: Q -> P_PK (ratio 2)
-P_S = 3413           // Response compression: Q -> P_S (ratio ~1.2)
-U_MOD = 5            // Commitment compression: values in {-2,-1,0,1,2}
-U_RANGE = 2          // Half-range for centering
-U_SCALE = 16         // Fixed scale for u: map [-16,16] -> [-2,2]
-```
-
-### Sparse Sampling Weights
-```
-SECRET_WEIGHT = 32       // Non-zero coeffs in secret X (75% zeros)
-MATRIX_WEIGHT = 48       // Non-zero coeffs in Y matrices
-NONCE_WEIGHT = 20        // Non-zero coeffs in nonce R
-CHALLENGE_WEIGHT = 10    // Non-zero coeffs in challenge c
-```
-
-### Rejection Bounds (S = R + c*X)
-```
-REJECTION_BOUND_INF = 16     // S L_inf bound
-REJECTION_BOUND_L2 = 1500    // S L2^2 bound
-MAX_REJECTION_TRIES = 1000   // Max signing attempts
-```
-
-### Verification Bounds (e1, e2 residuals)
-```
-TAU_RAW = 18                 // e1 raw L_inf bound (Q domain)
-RESPONSE_L2_BOUND = 60       // S_lifted total L2 bound
-RESIDUAL_L2_BOUND = 150      // e1 total L2 bound
-```
-
-### Security Bounds
-```
-D_MIN_INF = 10               // Min ||c*X|| L_inf (prevents D=0 attack)
-D_MIN_L2 = 1500              // Min ||c*X|| L2 (prevents D=0 attack)
+ETA = 1                  // Secret coefficient bound (ternary: -1, 0, +1)
+SECRET_WEIGHT = 50       // Sparse weight for master secret (trace-zero)
+NONCE_WEIGHT = 25        // Sparse weight for master nonce (trace-zero)
+CHALLENGE_WEIGHT = 25    // Sparse weight for challenge (trace-zero)
+Y_BOUND = 4              // Public polynomial bound: coeffs in [-4, 4]
+TAU = 65                 // Verification error threshold
+B_COEFF = 60             // Max signature coefficient (= w_r + w_c*η + 10)
+SEED_BYTES = 16          // Public seed length (128 bits)
 ```
 
 ---
 
-## Data Structures
+## Data Structures (C)
 
 ```c
-// Ring element: coefficients in Z_q
-typedef struct {
-    int16_t coeffs[N];       // N=128 coefficients
-} ring_t;
+// Component ring element in Z_q^N
+typedef struct { int16_t c[N]; } ring_t;
 
-// Module element: NUM_TREES ring elements
-typedef struct {
-    ring_t elem[NUM_TREES];  // 4 rings = 512 total coefficients
-} module_t;
-
-// Compact ring for u_rounded: values in {-2,-1,0,1,2}
-typedef struct {
-    int8_t coeffs[N];
-} ring_small_t;
+// Master ring element in Z_q^{2N}
+typedef struct { int16_t c[N2]; } master_t;
 
 typedef struct {
-    ring_small_t elem[NUM_TREES];
-} module_small_t;
+    uint8_t seed[SEED_BYTES];
+    ring_t pk_cyc;            // pk_cyc = round(x_cyc * y)
+    ring_t pk_neg;            // pk_neg = round(x_neg * y)
+} public_key_t;
 
-// Key pair (cross-product structure)
 typedef struct {
-    module_t X1;                         // First secret (sparse ternary)
-    module_t X2;                         // Second secret (sparse ternary, sum=0)
-    ring_t Y1[NUM_TREES][NUM_TREES];     // First public matrix (4x4 rings)
-    ring_t Y2[NUM_TREES][NUM_TREES];     // Second public matrix (4x4 rings)
-    module_t pk;                         // Public key = round(X1*Y2 - X2*Y1)
-    uint8_t seed[32];                    // Seed for Y1/Y2 expansion
-} keypair_t;
+    master_t x_master;        // Secret in master ring (trace-zero)
+    uint8_t seed[SEED_BYTES];
+} secret_key_t;
 
-// Signature (Huffman compressed)
 typedef struct {
-    uint8_t u_huffman[1024];     // Huffman-compressed u (commitment cross-product)
-    int u_huffman_len;
-    uint8_t sigma_huffman[2048]; // Huffman-compressed σ (signature cross-product)
-    int sigma_huffman_len;
+    ring_t s_cyc;             // Response in cyclic ring
+    ring_t s_neg;             // Response in negacyclic ring
+    ring_t w_cyc;             // Commitment in cyclic ring
+    ring_t w_neg;             // Commitment in negacyclic ring
 } signature_t;
+
+// Seedless signature (verifier reconstructs w)
+typedef struct {
+    uint8_t nonce_seed[12];   // Public nonce seed
+    uint8_t c_tilde[16];      // Commitment binding hash
+    uint8_t attempt;          // Rejection sampling attempt
+    uint8_t s_data[300];      // Range-coded s
+    int s_len;
+} seedless_sig_t;
 ```
 
 ---
 
 ## Core Operations
 
-### Ring Multiplication (Negacyclic Convolution)
+### CRT Projection (master → components)
 ```
-c = a * b  in  Z_q[X]/(X^N + 1)
+project_cyclic(x_master):
+  for i in [0, N):
+    x_cyc[i] = x[i] + x[i+N]  (mod q)
 
-For i in [0, N):
-    sum = 0
-    for j in [0, i]:
-        sum += a[j] * b[i-j]
-    for j in [i+1, N):
-        sum -= a[j] * b[N+i-j]    // Negacyclic: X^N = -1
-    c[i] = sum mod q
+project_negacyclic(x_master):
+  for i in [0, N):
+    x_neg[i] = x[i] - x[i+N]  (mod q)
 ```
 
-### Module-Vector Multiplication
+### CRT Lifting (components → master)
 ```
-result[j] = sum_{i=0}^{NUM_TREES-1} X[i] * Y[i][j]
+crt_lift(x_cyc, x_neg):
+  for i in [0, N):
+    sum  = x_cyc[i] + x_neg[i]
+    diff = x_cyc[i] - x_neg[i]
+    if (sum & 1) or (diff & 1):
+      return FAIL  // Parity mismatch
+    x[i]   = sum / 2
+    x[i+N] = diff / 2
+  return SUCCESS
 ```
 
-### LWR Round (Q -> P)
+### Ring Multiplication
 ```
-y = round(x * p / q)  with rounding to nearest
+Cyclic:     (a * b) in Z_q[X]/(X^N - 1)  // X^N = 1
+Negacyclic: (a * b) in Z_q[X]/(X^N + 1)  // X^N = -1
 ```
 
-### LWR Lift (P -> Q)
+### LWR Round / Unround
 ```
-x = y * q / p  (inverse, center of quantization bucket)
+round_p(x)   = round(x * P / Q)  // centered
+unround_p(y) = y * Q / P + Q/(2P)  // centered lift
+```
+
+### Trace-Zero Sampling
+```
+sample_sparse_master(weight):
+  // Sample weight/2 positions with +1, weight/2 with -1
+  // Ensures Σx[i] = 0 (trace-zero)
 ```
 
 ---
@@ -161,31 +133,18 @@ x = y * q / p  (inverse, center of quantization bucket)
 ## Algorithm: Key Generation
 
 ```
-1. Generate random 32-byte seed
-
-2. Expand Y1 from seed (matrix_idx=1):
-   - SHAKE256(domain || seed || idx)
-   - Sample 4x4 sparse ternary rings (weight=48)
-
-3. Expand Y2 from seed (matrix_idx=2):
-   - Same process, different index
-
-4. Generate secret X1:
-   - Sample 4 sparse ternary rings (weight=32)
-   - Each ring: 32 nonzero positions with values {-1, +1}
-
-5. Generate secret X2 with sum constraint:
-   - Sample 4 sparse ternary rings (weight=32)
-   - CONSTRAINT: sum(X2) = 0 (adjust last nonzero to enforce)
-   - This prevents certain algebraic attacks
-
-6. Compute cross-product public key:
-   t = X1 * Y2 - X2 * Y1         // Cross product in Z_{Q}
-   pk = round(t, Q, P_PK)        // LWR compression 4096 -> 2048
+keygen():
+  1. Sample seed σ ← {0,1}^128
+  2. y ← expand_ring(σ)           // Bounded: ||y||_∞ ≤ Y_BOUND
+  3. x_master ← sample_sparse_master(SECRET_WEIGHT)  // Trace-zero
+  4. x_cyc ← project_cyclic(x_master)
+  5. x_neg ← project_negacyclic(x_master)
+  6. pk_cyc ← round_p(x_cyc * y)  // Cyclic multiplication
+  7. pk_neg ← round_p(x_neg * y)  // Negacyclic multiplication
 
 Output:
-  - Secret key: (X1, X2, Y1, Y2, seed)
-  - Public key: (pk, Y1, Y2) or (pk, seed)
+  - sk = (x_master, σ)
+  - pk = (σ, pk_cyc, pk_neg)
 ```
 
 ---
@@ -193,71 +152,23 @@ Output:
 ## Algorithm: Signing
 
 ```
-Input: keypair, message
-Output: signature (u, σ)
-
-REPEAT (rejection sampling, max 1000 tries):
-
-    1. Sample two nonces:
-       R1 <- sparse ternary (weight=20)
-       R2 <- sparse ternary (weight=20)
-
-    2. Compute commitment (cross product):
-       u = R1 * Y2 - R2 * Y1         // Cross product in Z_{Q}
-
-    3. Compress commitment to {-2,-1,0,1,2}:
-       u_rounded[i] = clamp(u[i] * U_RANGE / U_SCALE, -2, 2)
-
-    4. Derive challenge c:
-       seed = SHAKE256(domain || u_rounded || pk || msg)
-       c = sparse_ternary_from_seed(seed, weight=10)
-
-    5. Compute responses:
-       S1 = R1 + c * X1              // Response 1
-       S2 = R2 + c * X2              // Response 2
-
-    6. Compute signature (cross product):
-       σ = S1 * Y2 - S2 * Y1         // Cross product
-
-    7. Check response norm bounds:
-       IF norm_inf(S1) > 16 OR norm_inf(S2) > 16:
-           reject
-       IF norm_l2_sq(S1) > 1500 OR norm_l2_sq(S2) > 1500:
-           reject
-
-    8. Check D = c*X bounds (security against D=0 attack):
-       D1 = c * X1, D2 = c * X2
-       IF max(||D1||_inf, ||D2||_inf) < 10:
-           reject
-
-    9. LWR compress σ:
-       σ_rounded = round(σ, Q, P_S)   // 4096 -> 3413
-
-    10. Apply dual-domain mask (PRF-based, reversible):
-        // Mask derived from challenge_seed = H(u || pk || msg)
-        mask = derive_dual_mask(challenge_seed)
-
-        σ_ntt = NTT(σ_rounded)
-        σ_ntt = σ_ntt + mask
-        σ_time = INTT(σ_ntt)
-        σ_masked = σ_time + mask
-
-    11. Compute verification residual:
-        pk_lifted = lift(pk, P_PK, Q)
-        σ_recovered = unmask_and_lift(σ_masked)
-        e = σ_recovered - u - c * pk_lifted
-
-    12. Check residual bounds:
-        IF norm_inf(e) > TAU_RAW (18):
-            reject
-        IF norm_l2(e) > RESIDUAL_L2_BOUND (150):
-            reject
-
-    13. If all checks pass:
-        Huffman encode u_rounded and σ_masked
-        Return signature (u_rounded, σ_masked, c)
-
-ENDREPEAT
+sign(sk, pk, msg):
+  1. y ← expand_ring(σ)
+  2. x_cyc, x_neg ← project(x_master)
+  3. Repeat until success:
+     a. r_master ← sample_sparse_master(NONCE_WEIGHT)  // Trace-zero
+     b. r_cyc, r_neg ← project(r_master)
+     c. w_cyc ← round_p(r_cyc * y)    // Cyclic commitment
+     d. w_neg ← round_p(r_neg * y)    // Negacyclic commitment
+     e. challenge_seed ← SHA3-256(w_cyc || w_neg || pk_cyc || pk_neg || σ || msg)
+     f. c_master ← expand_sparse_challenge(challenge_seed, CHALLENGE_WEIGHT)
+     g. c_cyc, c_neg ← project(c_master)
+     h. s_cyc ← r_cyc + c_cyc * x_cyc   // Cyclic response
+     i. s_neg ← r_neg + c_neg * x_neg   // Negacyclic response
+     j. if ||s_cyc||_∞ > B_COEFF or ||s_neg||_∞ > B_COEFF: continue
+     k. if ||s_cyc||_∞ ≥ 16 or ||s_neg||_∞ ≥ 16: continue  // 5-bit compression
+     l. Compute verification error, if > TAU: continue
+  4. Return σ = (s_cyc, s_neg, w_cyc, w_neg)
 ```
 
 ---
@@ -265,336 +176,133 @@ ENDREPEAT
 ## Algorithm: Verification
 
 ```
-Input: public key (pk, Y1, Y2), message, signature (u_rounded, σ_masked)
-Output: accept/reject
+verify(pk, msg, sig):
+  1. y ← expand_ring(σ)
 
-1. Decode signature:
-   u_rounded = huffman_decode(sig.u_huffman)
-   σ_masked = huffman_decode(sig.sigma_huffman)
+  // Coupling checks
+  2. if ||s_cyc||_∞ > B_COEFF or ||s_neg||_∞ > B_COEFF:
+       return REJECT
 
-2. Derive challenge (same as signing):
-   challenge_seed = SHAKE256(domain || u_rounded || pk || msg)
-   c = sparse_ternary_from_seed(challenge_seed, weight=10)
+  3. s_master ← crt_lift(s_cyc, s_neg)
+     if FAIL: return REJECT  // Liftability check
 
-3. Recover σ from masked/compressed form:
-   // Mask is derived from SAME challenge_seed (binds σ to u)
-   mask = derive_dual_mask(challenge_seed)
+  4. if Tr(s_master) ≢ 0 (mod q):
+       return REJECT  // Trace-zero check
 
-   // Unmask (reverse of: round → mask)
-   temp = σ_masked - mask
-   temp_ntt = NTT(temp)
-   temp_ntt = temp_ntt - mask
-   σ_rounded = INTT(temp_ntt)
+  // Reconstruct challenge
+  5. challenge_seed ← SHA3-256(w_cyc || w_neg || pk_cyc || pk_neg || σ || msg)
+  6. c_master ← expand_sparse_challenge(challenge_seed, CHALLENGE_WEIGHT)
+  7. c_cyc, c_neg ← project(c_master)
 
-   // Lift to Q
-   σ_lifted = lift(σ_rounded, P_S, Q)
+  // Verify in both rings
+  8. w'_cyc ← s_cyc * y - c_cyc * unround_p(pk_cyc)   // Cyclic: X^N = 1
+  9. w'_neg ← s_neg * y - c_neg * unround_p(pk_neg)   // Negacyclic: X^N = -1
 
-4. Lift commitment and public key:
-   u_lifted = u_rounded * (U_SCALE / U_RANGE)
-   pk_lifted = lift(pk, P_PK, Q)
+  10. err_cyc ← ||w'_cyc - unround_p(w_cyc)||_∞
+  11. err_neg ← ||w'_neg - unround_p(w_neg)||_∞
 
-5. Compute verification residual:
-   c_pk = c * pk_lifted
-   e = σ_lifted - u_lifted - c_pk
+  12. if max(err_cyc, err_neg) > TAU:
+        return REJECT
 
-6. Check residual bounds:
-   IF norm_inf(e) > TAU_RAW (18):
-       REJECT "Verification failed"
-   IF norm_l2(e) > RESIDUAL_L2_BOUND (150):
-       REJECT "L2 bound exceeded"
-
-7. ACCEPT
+  13. return ACCEPT
 ```
-
-**Why Verification Works** (algebraic derivation):
-```
-σ = S1*Y2 - S2*Y1
-  = (R1 + c*X1)*Y2 - (R2 + c*X2)*Y1
-  = R1*Y2 - R2*Y1 + c*(X1*Y2 - X2*Y1)
-  = u + c*pk_exact
-
-So: σ - u - c*pk ≈ 0 (small LWR error)
-```
-
-**Critical Security Notes**:
-- The mask is derived from `challenge_seed` which includes `u_rounded`
-- If attacker modifies `u_rounded`, the mask changes, breaking σ recovery
-- If attacker modifies `σ_masked`, the verification equation fails
-- Cross-product structure prevents covariance attack (only recovers pk, not X1/X2)
 
 ---
 
 ## Key Equations Summary
 
-| Step | Equation | Domain | Purpose |
-|------|----------|--------|---------|
-| KeyGen | `pk = round(X1*Y2 - X2*Y1)` | Q -> P_PK | Cross-product public key |
-| Sign (commit) | `u = R1*Y2 - R2*Y1` | Q | Commitment (cross product) |
-| Sign (compress) | `u_rounded = scale(u)` | [-2,2] | Compact commitment |
-| Sign (challenge) | `c = H(u \|\| pk \|\| msg)` | sparse ternary | Fiat-Shamir challenge |
-| Sign (response) | `S1 = R1 + c*X1, S2 = R2 + c*X2` | Q | Two responses |
-| Sign (signature) | `σ = S1*Y2 - S2*Y1` | Q | Signature (cross product) |
-| Sign (compress) | `σ_rounded = round(σ)` | Q -> P_S | LWR compression FIRST |
-| Sign (mask) | `σ_masked = dual_mask(σ_rounded)` | P_S | PRF-based protection |
-| Verify | `e = σ - u - c*pk ≈ 0` | Q (small) | Single verification equation |
-
-**Why cross-product provides security**:
-- Covariance attack recovers E[σ·c] = X1*Y2 - X2*Y1 = pk (public, not secret!)
-- Attacker cannot separate X1 from X2 without solving 2-LWE
-- sum(X2) = 0 constraint prevents certain algebraic shortcuts
+| Step | Equation | Purpose |
+|------|----------|---------|
+| CRT Projection | x_cyc = x[i] + x[i+N], x_neg = x[i] - x[i+N] | Master → components |
+| CRT Lifting | x[i] = (x_cyc + x_neg)/2, x[i+N] = (x_cyc - x_neg)/2 | Enforced by parity |
+| Trace-Zero | Σ x[i] ≡ 0 (mod q) | Constraint on master ring elements |
+| KeyGen (cyc) | pk_cyc = round(x_cyc * y) | Cyclic public key |
+| KeyGen (neg) | pk_neg = round(x_neg * y) | Negacyclic public key |
+| Commit (cyc) | w_cyc = round(r_cyc * y) | Cyclic commitment |
+| Commit (neg) | w_neg = round(r_neg * y) | Negacyclic commitment |
+| Challenge | c = H(w_cyc \|\| w_neg \|\| pk_cyc \|\| pk_neg \|\| σ \|\| msg) | Fiat-Shamir |
+| Response | s_cyc = r_cyc + c_cyc * x_cyc | Cyclic signature response |
+| Verify (cyc) | w' = s_cyc * y - c_cyc * unround(pk_cyc) | Check LWR error |
+| Verify (neg) | w' = s_neg * y - c_neg * unround(pk_neg) | Check LWR error |
 
 ---
 
-## Security Parameters
+## Coupling Constraint
 
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| Ring dim N | 128 | Security level |
-| Module rank | 4 | 512 total coefficients |
-| Secret sparsity | 75% zeros | Attack complexity C(128,32) |
-| Cross-product | X1*Y2 - X2*Y1 | Covariance attack resistance |
-| X2 constraint | sum(X2) = 0 | Prevents algebraic attacks |
-| Rejection sampling | On S1, S2, e | Ensure honest signatures pass |
-| PRF-bound mask | H(u,pk,msg) | Binds σ to commitment |
+A valid signature (s_cyc, s_neg) must satisfy:
 
-### Attack Complexity Breakdown
+1. **Coefficient bound**: ||s||_∞ ≤ B_COEFF = 60
+   - `verify_coupling()` checks this
 
-**Brute Force on Single Secret**:
-```
-C(128, 32) × 2^32 ≈ 2^115 per tree
-```
+2. **Liftability**: s_cyc[i] ≡ s_neg[i] (mod 2) for all i
+   - `crt_lift()` returns FAIL if violated
 
-**Full Module (4 trees, two secrets)**:
-```
-Need to recover BOTH X1 and X2
-(2^115)^4 × 2 ≈ 2^461 (if independent)
-Actually correlated: ~2^180 effective
-```
+3. **Trace-zero**: Σ s_master[i] ≡ 0 (mod q)
+   - `verify_trace_zero()` checks this after lifting
 
-**Cross-Product Hardness**:
+Random pairs fail with overwhelming probability:
+- Liftability: Pr ≈ 2^{-256}
+- Trace-zero: Pr ≈ 1/q ≈ 1/499
+
+---
+
+## Signature Formats
+
+### Full Signature (~436 bytes)
 ```
-Given pk = round(X1*Y2 - X2*Y1), find X1, X2
-This is 2-LWE problem: ~2^180 classical
+s_cyc, s_neg: ~180 bytes (range-coded)
+w_cyc, w_neg: ~256 bytes (rounded commitments)
 ```
 
-**Lattice Attacks (BKZ)**:
+### Seedless-w Signature (~209 bytes)
 ```
-Root Hermite factor required: δ ≈ 1.003
-BKZ block size: β ≈ 400-500
-Classical cost: ~2^180
-Quantum cost: ~2^120 (Grover speedup on enumeration)
+nonce_seed:   12 bytes   // Verifier reconstructs w
+c_tilde:      16 bytes   // Commitment binding
+attempt:       1 byte    // Rejection sampling index
+s (range):  ~180 bytes   // Delta-encoded response
+```
+
+### Public Key (~416 bytes)
+```
+seed:         16 bytes
+pk_cyc, pk_neg (Huffman): ~400 bytes
 ```
 
 ---
 
-## Error Budget
+## Compression Notes
 
-The verification residual `e = σ_lifted - u - c*pk_lifted` has contributions from:
+### Range Coding for s
+- s_cyc encoded with small-value table + escape codes
+- s_neg encoded as delta: δ = (s_cyc - s_neg) / 2
+- Permutation from challenge seed reorders coefficients for better compression
 
-1. **σ compression error**: `round(σ) -> lift(round(σ))` adds ~1 per coeff
-2. **pk compression error**: `round(X1*Y2-X2*Y1) -> lift(...)` adds ~1 per coeff
-3. **Convolution amplification**: Sparse c (weight 10) * sparse elements
-
-Typical observed: `e_inf ~ 14-17`, `e_l2 ~ 110-130`
-
-Bounds: `TAU_RAW = 18`, `RESIDUAL_L2_BOUND = 150`
-
----
-
-## Dual-Domain Masking
-
-### Overview
-The signature σ is protected by a dual-domain mask that:
-1. Hides structural information about σ
-2. Cryptographically binds σ to the commitment u
-3. Ensures modifications to either component break verification
-
-### Mask Derivation (PRF-based)
-```c
-// Mask is derived from commitment, public key, and message
-challenge_seed = SHAKE256("MODULE_LWR_CHALLENGE_SEED" || u_rounded || pk || msg)
-mask = derive_dual_mask(challenge_seed)
-```
-
-The mask depends on:
-- `u_rounded` - the commitment (binds mask to commitment)
-- `pk` - public key
-- `msg` - message being signed
-
-### Mask Application (Signing)
-```
-1. σ_rounded = round(σ)        // LWR compression FIRST
-2. σ_ntt = NTT(σ_rounded)      // Transform to NTT domain
-3. σ_ntt' = σ_ntt + mask       // Add mask in NTT domain
-4. σ_time = INTT(σ_ntt')       // Back to time domain
-5. σ_masked = σ_time + mask    // Add same mask in time domain
-```
-
-### Mask Removal (Verification)
-```
-1. temp = σ_masked - mask          // Subtract mask in time domain
-2. temp_ntt = NTT(temp)            // To NTT domain
-3. temp_ntt' = temp_ntt - mask     // Subtract mask in NTT domain
-4. σ_rounded = INTT(temp_ntt')     // Recovered rounded σ
-5. σ_lifted = lift(σ_rounded)      // LWR lift to Q
-```
-
-### Properties
-- **Order**: Round FIRST, then mask (rounding happens before masking)
-- **Exact Recovery**: With proper NTT, `unmask(mask(σ_rounded)) = σ_rounded` (zero error on masked layer)
-- **LWR Error**: Rounding adds ~1-2 per coefficient error, applied before masking
-- **Linearity**: NTT is linear, so the mask provides hiding but not standalone malleability protection
-- **Binding**: Mask derived from H(u,pk,msg) binds σ to commitment
+### Huffman for Public Key
+- pk values in [0, P-1] = [0, 47]
+- Huffman tables optimized for coefficient distribution
 
 ---
 
-## Security Analysis: Attack Resistance
+## Security Notes
 
-### 1. Malleability Resistance
+- **Master ring sampling**: Secrets, nonces, and challenges are sampled in the
+  512-dim master ring with trace-zero. This is the key security mechanism.
 
-**Attack Model**: Attacker intercepts signature (σ_masked, u) and attempts to create valid (σ', u') for same message.
+- **CRT bijection** (Lean-verified): The projection (π_cyc, π_neg) is a bijection.
+  Learning π_cyc(x) reveals zero information about π_neg(x).
 
-**Why it fails**:
+- **No dimension splitting**: An attacker cannot treat the two 256-dim rings
+  independently. Any valid (s_cyc, s_neg) must lift to the master ring.
 
-| Modification | Result | Detection |
-|-------------|--------|-----------|
-| Modify σ_masked only | σ' ≠ σ, so e = σ' - u - c*pk ≠ 0 | Verification equation fails |
-| Modify u only | Mask changes (derived from u), unmask gives garbage | Verification equation fails |
-| Modify both | Must find σ' where σ' - u' - c*pk ≈ 0 AND mask(u') correctly unmasks σ' | Computationally infeasible |
+- **Verification rejects decoupled forgeries**: Coefficient bounds, liftability,
+  and trace-zero are all checked explicitly.
 
-**Key Insight**: The verification equation `σ - u - c*pk ≈ 0` is the core malleability defense. The dual-domain mask provides:
-- Hiding of σ's structure
-- Cryptographic binding between σ and u (via PRF)
-
-**Tested Result**: Adding constant k to σ_masked causes ||e||∞ to exceed bounds for k ≥ 2.
-
-### 2. Covariance/Correlation Attacks
-
-**Attack Model**: Collect many (signature, message) pairs and use statistical analysis to recover secrets X1, X2.
-
-**Defense**: Cross-product structure
-- σ = S1*Y2 - S2*Y1 where S1 = R1 + c*X1, S2 = R2 + c*X2
-- E[σ·c] = X1*Y2 - X2*Y1 = pk (PUBLIC, not secret!)
-- Attacker recovers only the public key, cannot separate X1 from X2
-
-**Why cross-product works**:
-```
-Standard scheme: E[S·c] ∝ X (leaks secret direction)
-Cross-product:   E[σ·c] = X1*Y2 - X2*Y1 = pk (public!)
-```
-
-**Tested Result**: Covariance attack on 10,000 signatures recovers pk with correlation ~1.0, but X1/X2 correlation < 0.3.
-
-### 3. Chosen Message Attacks
-
-**Attack Model**: Attacker chooses messages to sign, attempts to learn X1, X2.
-
-**Defense**:
-- Challenge c = H(u || pk || msg) binds to random commitment u
-- Each signature uses independent nonces R1, R2
-- Rejection sampling ensures S1, S2 distribution independent of X1, X2
-
-**Tested Result**: No exploitable correlation found between chosen messages and recovered information.
-
-### 4. Forgery Attempts
-
-**Attack Model**: Create valid signature without knowing X1, X2.
-
-**Defense**: Must find X1', X2' such that:
-```
-round(X1'*Y2 - X2'*Y1) = pk    // Match public key
-```
-
-**Hardness**:
-- This is the 2-LWE problem with cross-product structure
-- Finding X1', X2' satisfying the cross-product: ~2^180
-
-**Tested Result**: 0 forgeries in 100,000 random attempts.
-
-### 5. Nonce Reuse Attack
-
-**Attack Model**: If same nonces (R1, R2) used twice with different messages.
-
-**Vulnerability**:
-```
-σ1 = (R1 + c1*X1)*Y2 - (R2 + c1*X2)*Y1
-σ2 = (R1 + c2*X1)*Y2 - (R2 + c2*X2)*Y1
-σ1 - σ2 = (c1 - c2)*(X1*Y2 - X2*Y1) = (c1 - c2)*pk
-```
-This only reveals pk (public), but still weakens security!
-
-**Defense**: Nonces R1, R2 must be generated freshly using CSPRNG for each signature.
-
-**Warning**: Nonce reuse weakens the scheme (though less catastrophic than standard Schnorr).
-
-### 6. D=0 Attack (Weak Challenge)
-
-**Attack Model**: If challenge c is chosen such that c*X1 ≈ 0 and c*X2 ≈ 0.
-
-**Vulnerability**: S1 ≈ R1, S2 ≈ R2, signature doesn't bind to secrets.
-
-**Defense**: Rejection sampling enforces:
-```
-max(||c*X1||∞, ||c*X2||∞) ≥ D_MIN_INF (10)
-```
-
-**Tested Result**: Weak challenges rejected during signing.
-
----
-
-## Security Bounds Summary
-
-| Attack | Complexity | Status |
-|--------|------------|--------|
-| 2-LWE (cross-product) | ~2^180 | Secure |
-| Covariance attack | Recovers pk only | Secure |
-| Malleability | Fails verification | Secure |
-| Chosen message | No correlation | Secure |
-| Forgery (random) | 0/100k attempts | Secure |
-| Nonce reuse | Reveals pk only | Weakened but not broken |
-
----
-
-## Verification Equation Derivation
-
-The core security rests on the algebraic constraint:
-
-**Signing** (cross-product):
-```
-u = R1*Y2 - R2*Y1              // Commitment (cross product)
-S1 = R1 + c*X1                 // Response 1
-S2 = R2 + c*X2                 // Response 2
-σ = S1*Y2 - S2*Y1              // Signature (cross product)
-pk = round(X1*Y2 - X2*Y1)      // Public key
-```
-
-**Verification** (rearranging):
-```
-σ = S1*Y2 - S2*Y1
-  = (R1 + c*X1)*Y2 - (R2 + c*X2)*Y1
-  = R1*Y2 - R2*Y1 + c*(X1*Y2 - X2*Y1)
-  = u + c*pk_exact
-  ≈ u + c*pk                   // With LWR error
-```
-
-So `σ - u - c*pk ≈ 0` (small error from LWR rounding).
-
-**Why forging is hard**:
-- Attacker doesn't know X1 or X2 separately
-- Covariance attack only recovers X1*Y2 - X2*Y1 = pk (public!)
-- Must solve 2-LWE to separate X1 and X2
-- sum(X2) = 0 constraint prevents algebraic shortcuts
+- **Concrete security**: ~2^138 classical (512-dim lattice problem)
 
 ---
 
 ## File Reference
 
-Reference implementation: `/tmp/cross_product_sig.h`
-- `cps_secret_key`: (X1, X2, Y1, Y2)
-- `cps_public_key`: (pk, Y1, Y2)
-- `cps_signature`: (σ, u, c)
-- `cps_keygen()`: Key generation
-- `cps_sign()`: Signing
-- `cps_verify()`: Verification
-
-Main source (may need updating to cross-product): `module_lwr_256_256.c`
+- Reference implementation: `crt_coupled_sig.c`
+- Security proof: `euf_cma_proof_dual_pk.tex`
+- Lean formalization: `lean/CRTSecurity/Aristotle.lean`
